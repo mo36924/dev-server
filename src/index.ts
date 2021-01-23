@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { createReadStream, readFileSync, writeFileSync } from "fs";
 import { readFile } from "fs/promises";
-import { createServer } from "http";
+import { createServer, Server } from "http";
 import { tmpdir } from "os";
 import { extname, join } from "path";
 import process from "process";
@@ -22,7 +22,7 @@ export type Options = {
   port?: number;
 };
 
-export default (options: Options = {}) => {
+export default (options: Options = {}): Server => {
   const data = `${ts.sys.readFile("package.json")}${JSON.stringify(options)}`;
   const cacheFile = join(tmp, createHash("md5").update(data).digest("hex"));
   const cache: { [key: string]: string } = Object.create(null);
@@ -45,6 +45,7 @@ export default (options: Options = {}) => {
   const transform = (path: string, data: string) => {
     const result = transformSync(data, {
       ...babel,
+      sourceMaps: "inline",
       filename: path,
     });
 
@@ -53,7 +54,24 @@ export default (options: Options = {}) => {
 
   const host = ts.createWatchCompilerHost(
     "tsconfig.json",
-    {},
+    {
+      incremental: true,
+      strict: true,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      forceConsistentCasingInFileNames: true,
+      declaration: false,
+      declarationMap: false,
+      noEmit: false,
+      noEmitOnError: true,
+      outDir: undefined,
+      rootDir: undefined,
+      sourceMap: false,
+      inlineSourceMap: true,
+      inlineSources: true,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Error,
+      tsBuildInfoFile: "tsconfig.tsbuildinfo",
+    },
     {
       ...ts.sys,
       readFile(path, encoding) {
@@ -101,7 +119,7 @@ export default (options: Options = {}) => {
     watchProgram.close();
   }
 
-  const server = createServer({}, async (req, res) => {
+  const server = createServer(async (req, res) => {
     const path = new URL(req.url || "/", "http://localhost/").pathname.slice(1);
     let isScript = false;
 
@@ -128,10 +146,16 @@ export default (options: Options = {}) => {
     }
 
     if (isScript) {
-      const data = await readFile(path, "utf-8");
-      const code = transform(path, data);
-      cache[path] = code;
-      res.end(code);
+      try {
+        const data = await readFile(path, "utf-8");
+        const code = transform(path, data);
+        cache[path] = code;
+        res.end(code);
+      } catch {
+        res.statusCode = 404;
+        res.end();
+      }
+
       return;
     }
 
